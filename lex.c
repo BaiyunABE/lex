@@ -3,6 +3,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <pthread.h>
+#include <semaphore.h>
 
 #define NTYPES 8
 #define BUF_SIZE 0x1000
@@ -641,30 +642,49 @@ enum TokenType {
   COMMENT
 };
 
+enum TokenType token_type(int i) {
+  static const enum TokenType type[NTYPES + 1] = {
+    KEYWORD,
+    IDENTIFIER,
+    OPERATOR,
+    DELIMITER,
+    CHARCON,
+    STRING,
+    NUMBER,
+    ERROR,
+    COMMENT
+  };
+  return type[i];
+}
+
 typedef enum ParseResult (*TokenParser)(char, boolean);
 
-
-struct thread_data {
-  enum TokenType type;
-  char c;
-  boolean restart;
-};
+sem_t full[NTYPES + 1];
+sem_t empty[NTYPES + 1];
+char input_c;
+boolean input_restart;
+enum ParseResult res[NTYPES + 1];
 
 void* token_parser(void* arg) {
-  struct thread_data* data = (struct thread_data*)arg;
+  int i = (int)(size_t)arg;
   static const TokenParser parser[NTYPES + 1] = {
     keyword_parser, identifier_parser, operator_parser, delimiter_parser,
     charcon_parser, string_parser, number_parser, error_parser, comment_parser
   };
-  return (void*)parser[data->type](data->c, data->restart);
+  while (1) {
+    sem_wait(&full[i]);
+    res[i] = parser[i](input_c, input_restart);
+    sem_post(&empty[i]);
+  }
+  return NULL;
 }
 
-const char* token_name(enum TokenType type) {
+const char* token_name(int i) {
   static const char* name[NTYPES] = {
     "KEYWORD", "IDENTIFIER", "OPERATOR", "DELIMITER",
     "CHARCON", "STRING", "NUMBER", "ERROR"
   };
-  return name[type];
+  return name[i];
 }
 
 /*
@@ -733,6 +753,13 @@ int main(int argc, char* argv[])
   int n[NTYPES] = { 0 };
   int len[NTYPES + 1] = { 0 };
 
+  pthread_t tids[NTYPES + 1];
+  for (int i = 0; i < NELEMS(tids); i++) {
+    sem_init(&full[i], 0, 0);
+    sem_init(&empty[i], 0, 0);
+    pthread_create(&tids[i], NULL, token_parser, (void*)(size_t)i);
+  }
+
   for (;;) {
     switch (*forward) {
       case EOF:
@@ -770,16 +797,14 @@ int main(int argc, char* argv[])
         char c = *forward;
         token[idx++] = c;
         enum ParseResult rv[NTYPES + 1];
-        pthread_t tids[NTYPES + 1];       
-        struct thread_data data[NTYPES + 1];
+        input_c = c;
+        input_restart = (lexeme_begin == forward);
         for (int i = 0; i < NELEMS(rv); i++) {
-          data[i].type = i;
-          data[i].c = c;
-          data[i].restart = (lexeme_begin == forward);
-          pthread_create(&tids[i], NULL, token_parser, (void*)&data[i]);
+          sem_post(&full[i]);
         }
         for (int i = 0; i < NELEMS(rv); i++) {
-          pthread_join(tids[i], (void**)&rv[i]);
+          sem_wait(&empty[i]);
+          rv[i] = res[i];
         }
         forward++;
         if (all(rv, NELEMS(rv), PARSE_ERROR)) {
