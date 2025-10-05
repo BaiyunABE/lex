@@ -2,15 +2,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-#include <pthread.h>
-#include <semaphore.h>
 
 #define NTYPES 8
 #define BUF_SIZE 0x1000
 #define TOKEN_SIZE 100
 #define OTHER(x) (~x & 1u)
 #define NELEMS(a) (sizeof(a) / sizeof(a[0]))
-#define UPPER(c) (c | 32)
+#define LOWER(c) (c | 32)
 #define IS_OCT_DIGIT(c) ((c | 0x07) == '7')
 
 typedef enum {
@@ -20,7 +18,7 @@ typedef enum {
 
 enum ParseResult {
   PARSE_SUCCESS,
-  PARSE_ERROR,
+  PARSE_END,
   PARSE_INCOMPLETE
 };
 
@@ -83,7 +81,7 @@ enum ParseResult keyword_parser(char c, boolean restart) {
     now = trie;
   }
   else if (now == NULL) {
-    return PARSE_ERROR;
+    return PARSE_END;
   }
 
   for (now = now->child; now != NULL; now = now->next) {
@@ -92,7 +90,7 @@ enum ParseResult keyword_parser(char c, boolean restart) {
     }
   }
 
-  return now == NULL ? PARSE_ERROR : now->flag;
+  return now == NULL ? PARSE_END : now->flag;
 }
 
 enum ParseResult identifier_parser(char c, boolean restart) {
@@ -108,7 +106,7 @@ enum ParseResult identifier_parser(char c, boolean restart) {
         state = PARSE_SUCCESS;
       }
       else {
-        state = PARSE_ERROR;
+        state = PARSE_END;
       }
       break;
     case PARSE_SUCCESS:
@@ -116,7 +114,7 @@ enum ParseResult identifier_parser(char c, boolean restart) {
         state = PARSE_SUCCESS;
       }
       else {
-        state = PARSE_ERROR;
+        state = PARSE_END;
       }
       break;
   }
@@ -155,7 +153,7 @@ enum ParseResult operator_parser(char c, boolean restart) {
     now = trie;
   }
   else if (now == NULL)
-    return PARSE_ERROR;
+    return PARSE_END;
 
   for (now = now->child; now != NULL; now = now->next) {
     if (c == now->c) {
@@ -163,12 +161,12 @@ enum ParseResult operator_parser(char c, boolean restart) {
     }
   }
 
-  return now == NULL ? PARSE_ERROR : now->flag;
+  return now == NULL ? PARSE_END : now->flag;
 }
 
 enum ParseResult delimiter_parser(char c, boolean restart) {
   if (restart == FALSE) {
-    return PARSE_ERROR;
+    return PARSE_END;
   }
 
   static const char delimiters[10] = {
@@ -181,7 +179,7 @@ enum ParseResult delimiter_parser(char c, boolean restart) {
       return PARSE_SUCCESS;
     }
   }
-  return PARSE_ERROR;
+  return PARSE_END;
 }
 
 enum ParseResult charcon_parser(char c, boolean restart) {
@@ -196,7 +194,7 @@ enum ParseResult charcon_parser(char c, boolean restart) {
       if (c == '\'') {
         state = 2;
       }
-      else if (UPPER(c) == 'u' || c == 'L') {
+      else if (LOWER(c) == 'u' || c == 'L') {
         state = 4;
       }
       else {
@@ -231,7 +229,7 @@ enum ParseResult charcon_parser(char c, boolean restart) {
   }
 
   if (state == -1) {
-    return PARSE_ERROR;
+    return PARSE_END;
   }
   else if (state == 1) {
     return PARSE_SUCCESS;
@@ -302,7 +300,7 @@ enum ParseResult string_parser(char c, boolean restart) {
   }
 
   if (state == -1) {
-    return PARSE_ERROR;
+    return PARSE_END;
   }
   else if (state == 1) {
     return PARSE_SUCCESS;
@@ -312,7 +310,7 @@ enum ParseResult string_parser(char c, boolean restart) {
   }
 }
 
-enum ParseResult number_parser(char c, boolean restart) {
+enum ParseResult integer_parser(char c, boolean restart) {
   static int state = 0;
 
   if (restart) {
@@ -320,7 +318,135 @@ enum ParseResult number_parser(char c, boolean restart) {
   }
 
   switch (state) {
-    case 0: // s
+    case 0:
+      if (c == '0') {
+        state = 1; // 0
+      }
+      else if (isdigit(c)) {
+        state = 2; // dec
+      }
+      else {
+        state = -1;
+      }
+      break;
+    case 1:
+      if (IS_OCT_DIGIT(c)) {
+        state = 3; // oct
+      }
+      else if (LOWER(c) == 'x') {
+        state = 4; // 0x
+      }
+      else if (LOWER(c) == 'l') {
+        state = 6; // l
+      }
+      else if (LOWER(c) == 'u') {
+        state = 7; // u
+      }
+      else {
+        state = -1;
+      }
+      break;
+    case 2: // dec
+      if (LOWER(c) == 'l') {
+        state = 6; // l
+      }
+      else if (LOWER(c) == 'u') {
+        state = 7; // u
+      }
+      else if (!isdigit(c)) {
+        state = -1;
+      }
+      break;
+    case 3: // oct
+      if (LOWER(c) == 'l') {
+        state = 6; // l
+      }
+      else if (LOWER(c) == 'u') {
+        state = 7; // u
+      }
+      else if (!IS_OCT_DIGIT(c)) {
+        state = -1;
+      }
+      break;
+    case 4: // 0x
+      if (isxdigit(c)) {
+        state = 5; // hex
+      }
+      else {
+        state = -1;
+      }
+      break;
+    case 5: // hex
+      if (LOWER(c) == 'l') {
+        state = 6; // l
+      }
+      else if (LOWER(c) == 'u') {
+        state = 7; // u
+      }
+      else if (!isxdigit(c)) {
+        state = -1;
+      }
+      break;
+    case 6: // l
+      if (LOWER(c) == 'l') {
+        state = 8; // ll
+      }
+      else if (LOWER(c) == 'u') {
+        state = 10; // lu
+      }
+      else {
+        state = -1;
+      }
+      break;
+    case 7: // u
+      if (LOWER(c) == 'l') {
+        state = 9; // ul
+      }
+      else {
+        state = -1;
+      }
+      break;
+    case 8: // ll
+      if (LOWER(c) == 'u') {
+        state = 10; // llu
+      }
+      else {
+        state = -1;
+      }
+      break;
+    case 9: // ul
+      if (LOWER(c) == 'l') {
+        state = 10; // ull
+      }
+      else {
+        state = -1;
+      }
+      break;
+    case 10:
+      state = -1;
+      break;
+  }
+
+  if (state == -1) {
+    return PARSE_END;
+  }
+  else if (state == 4) {
+    return PARSE_INCOMPLETE;
+  }
+  else {
+    return PARSE_SUCCESS;
+  }
+}
+
+enum ParseResult floating_parser(char c, boolean restart) {
+  static int state = 0;
+
+  if (restart) {
+    state = 0;
+  }
+
+  switch (state) {
+    case 0:
       if (c == '0') {
         state = 1; // 0
       }
@@ -335,26 +461,17 @@ enum ParseResult number_parser(char c, boolean restart) {
       }
       break;
     case 1: // 0
-      if (c == '.') {
-        state = 3; // .
+      if (isdigit(c)) {
+        state = 2; // x
       }
-      else if (UPPER(c) == 'e') {
-        state = 5; // e
+      else if (c == '.') {
+        state = 4; // dec
       }
-      else if (IS_OCT_DIGIT(c)) {
-        state = 8; // oct
+      else if (LOWER(c) == 'x') {
+        state = 5; // 0x
       }
-      else if (UPPER(c) == 'x') {
-        state = 9; // hex
-      }
-      else if (UPPER(c) == 'l') {
-        state = 10; // l
-      }
-      else if (UPPER(c) == 'u') {
-        state = 12; // u
-      }
-      else if (UPPER(c) == 'f') {
-        state = 14; // f
+      else if (LOWER(c) == 'e') {
+        state = 9; // e
       }
       else {
         state = -1;
@@ -362,19 +479,10 @@ enum ParseResult number_parser(char c, boolean restart) {
       break;
     case 2: // x
       if (c == '.') {
-        state = 3; // .
+        state = 4; // dec
       }
-      else if (UPPER(c) == 'e') {
-        state = 5; // e
-      }
-      else if (UPPER(c) == 'l') {
-        state = 10; // l
-      }
-      else if (UPPER(c) == 'u') {
-        state = 12; // u
-      }
-      else if (UPPER(c) == 'f') {
-        state = 14; // f
+      else if (LOWER(c) == 'e') {
+        state = 9; // e
       }
       else if (!isdigit(c)) {
         state = -1;
@@ -382,120 +490,113 @@ enum ParseResult number_parser(char c, boolean restart) {
       break;
     case 3: // .
       if (isdigit(c)) {
-        state = 4; // .x
+        state = 4; // dec
       }
       else {
         state = -1;
       }
       break;
-    case 4: // .x
-      if (UPPER(c) == 'e') {
-        state = 5; // e
+    case 4: // dec
+      if (LOWER(c) == 'e') {
+        state = 9; // e
       }
-      else if (UPPER(c) == 'l') {
-        state = 10; // l
-      }
-      else if (UPPER(c) == 'u') {
-        state = 12; // u
-      }
-      else if (UPPER(c) == 'f') {
-        state = 14; // f
+      else if (LOWER(c) == 'f' || LOWER(c) == 'l') {
+        state = 12; // f/l
       }
       else if (!isdigit(c)) {
         state = -1;
       }
       break;
-    case 5: // e
+    case 5: // 0x
+      if (isxdigit(c)) {
+        state = 6; // hx
+      }
+      else if (state == '.') {
+        state = 7; // h.
+      }
+      else {
+        state = -1;
+      }
+      break;
+    case 6: // hx
+      if (c == '.') {
+        state = 8; // hex
+      }
+      else {
+        state = -1;
+      }
+      break;
+    case 7: // h.
+      if (isxdigit(c)) {
+        state = 8; // hex
+      }
+      else {
+        state = -1;
+      }
+      break;
+    case 8: // hex
+      if (LOWER(c) == 'p') {
+        state = 9; // e
+      }
+      else if (!isxdigit(c)) {
+        state = -1;
+      }
+      break;
+    case 9: // e
       if (c == '+' || c == '-') {
-        state = 6; // +
+        state = 10; // +
       }
       else if (isdigit(c)) {
-        state = 7; // ex
+        state = 11; // ex
       }
       else {
         state = -1;
       }
       break;
-    case 6: // +
-      if (isdigit(c )) {
-        state = 7; // ex
+    case 10: // +
+      if (isdigit(c)) {
+        state = 11; // ex
       }
       else {
         state = -1;
       }
       break;
-    case 7: // ex
-      if (UPPER(c) == 'l') {
-        state = 10; // l
-      }
-      else if (UPPER(c) == 'u') {
-        state = 12; // u
-      }
-      else if (UPPER(c) == 'f') {
-        state = 14; // f
+    case 11: // ex
+      if (LOWER(c) == 'f' || LOWER(c) == 'l') {
+        state = 12; // f/l
       }
       else if (!isdigit(c)) {
         state = -1;
       }
       break;
-    case 8: // oct
-      if (!IS_OCT_DIGIT(c)) {
-        state = -1;
-      }
-      break;
-    case 9: // hex
-      if (!isxdigit(c)) {
-        state = -1;
-      }
-      break;
-    case 10: // l
-      if (UPPER(c) == 'l') {
-        state = 11; // ll
-      }
-      else if (UPPER(c) == 'u') {
-        state = 14; // f(lu)
-      }
-      else {
-        state = -1;
-      }
-      break;
-    case 11: // ll
-      if (UPPER(c) == 'u') {
-        state = 14; // f(llu)
-      }
-      else {
-        state = -1;
-      }
-      break;
-    case 12: // u
-      if (UPPER(c) == 'l') {
-        state = 13; // ul
-      }
-      else {
-        state = -1;
-      }
-      break;
-    case 13: // ul
-      if (UPPER(c) == 'l') {
-        state = 14; // ull
-      }
-      else {
-        state = -1;
-      }
-      break;
-    case 14: // f
+    case 12:
       state = -1;
       break;
   }
 
   if (state == -1) {
-    return PARSE_ERROR;
+    return PARSE_END;
   }
-  else if (state == 3 || state == 5 || state == 6) {
+  else if (state == 4 || state == 11 || state == 12) {
+    return PARSE_SUCCESS;
+  }
+  else {
+    return PARSE_INCOMPLETE;
+  }
+}
+
+enum ParseResult number_parser(char c, boolean restart) {
+  enum ParseResult res_int = integer_parser(c, restart);
+  enum ParseResult res_float = floating_parser(c, restart);
+
+  if (res_int == PARSE_SUCCESS || res_float == PARSE_SUCCESS) {
+    return PARSE_SUCCESS;
+  }
+  else if (res_int == PARSE_INCOMPLETE || res_float == PARSE_INCOMPLETE) {
     return PARSE_INCOMPLETE;
   }
   else {
-    return PARSE_SUCCESS;
+    return PARSE_END;
   }
 }
 
@@ -508,8 +609,8 @@ enum ParseResult error_parser(char c, boolean restart) {
 
   switch (state) {
     case 0:
-      if (c == '@') {
-        state = 1;
+      if (c == '@' || c == '$' || c == '`') {
+        state = 1; // @
       }
       else if (c == '\'') {
         state = 2;
@@ -520,30 +621,36 @@ enum ParseResult error_parser(char c, boolean restart) {
       else if (isdigit(c)) {
         state = 4;
       }
+      else if (c == 'L' || c == 'U') {
+        state = 6;
+      }
+      else if (c == 'u') {
+        state = 7;
+      }
       else {
         state = -1;
       }
       break;
-    case 1:
+    case 1: // illegal char
       state = -1;
       break;
-    case 2:
-      if (c == '\n') {
-        state = -1;
+    case 2: // char
+      if (c == '\\') {
+        state = 8;
       }
-      else if (c == '\'') {
-        state = -1;
-      }
-      break;
-    case 3:
-      if (c == '\n') {
-        state = -1;
-      }
-      else if (c == '\"') {
+      else if (c == '\n' || c == '\'') {
         state = -1;
       }
       break;
-    case 4:
+    case 3: // string
+      if (c == '\\') {
+        state = 9;
+      }
+      else if (c == '\n' || c == '\"') {
+        state = -1;
+      }
+      break;
+    case 4: // number
       if (isalpha(c) || c == '_') {
         state = 5;
       }
@@ -551,15 +658,54 @@ enum ParseResult error_parser(char c, boolean restart) {
         state = -1;
       }
       break;
-    case 5:
+    case 5: // illegal identifier
       if (!(isalnum(c) || c == '_')) {
+        state = -1;
+      }
+      break;
+    case 6: // L/U
+      if (c == '\'') {
+        state = 2;
+      }
+      else if (c == '\"') {
+        state = 3;
+      }
+      else {
+        state = -1;
+      }
+      break;
+    case 7: // u
+      if (c == '\'') {
+        state = 2;
+      }
+      else if (c == '\"') {
+        state = 3;
+      }
+      else if (c == '8') {
+        state = 10;
+      }
+      else {
+        state = -1;
+      }
+      break;
+    case 8:
+      state = 2;
+      break;
+    case 9:
+      state = 3;
+      break;
+    case 10:
+      if (c == '\"') {
+        state = 3;
+      }
+      else {
         state = -1;
       }
       break;
   }
 
   if (state == -1) {
-    return PARSE_ERROR;
+    return PARSE_END;
   }
   else if (state == 4) {
     return PARSE_INCOMPLETE;
@@ -620,7 +766,7 @@ enum ParseResult comment_parser(char c, boolean restart) {
   }
 
   if (state == -1) {
-    return PARSE_ERROR;
+    return PARSE_END;
   }
   else if (state == 1) {
     return PARSE_INCOMPLETE;
@@ -630,53 +776,14 @@ enum ParseResult comment_parser(char c, boolean restart) {
   }
 }
 
-enum TokenType {
-  KEYWORD,
-  IDENTIFIER,
-  OPERATOR,
-  DELIMITER,
-  CHARCON,
-  STRING,
-  NUMBER,
-  ERROR,
-  COMMENT
-};
-
-enum TokenType token_type(int i) {
-  static const enum TokenType type[NTYPES + 1] = {
-    KEYWORD,
-    IDENTIFIER,
-    OPERATOR,
-    DELIMITER,
-    CHARCON,
-    STRING,
-    NUMBER,
-    ERROR,
-    COMMENT
-  };
-  return type[i];
-}
-
 typedef enum ParseResult (*TokenParser)(char, boolean);
 
-sem_t full[NTYPES + 1];
-sem_t empty[NTYPES + 1];
-char input_c;
-boolean input_restart;
-enum ParseResult res[NTYPES + 1];
-
-void* token_parser(void* arg) {
-  int i = (int)(size_t)arg;
+enum ParseResult token_parser(char c, boolean restart, int i) {
   static const TokenParser parser[NTYPES + 1] = {
     keyword_parser, identifier_parser, operator_parser, delimiter_parser,
     charcon_parser, string_parser, number_parser, error_parser, comment_parser
   };
-  while (1) {
-    sem_wait(&full[i]);
-    res[i] = parser[i](input_c, input_restart);
-    sem_post(&empty[i]);
-  }
-  return NULL;
+  return parser[i](c, restart);
 }
 
 const char* token_name(int i) {
@@ -700,13 +807,13 @@ void set(int* arr, int len, int val) {
  * if `arr` is all `val`, return `1`
  * else return `0`
  * */
-int all(enum ParseResult* arr, int len, enum ParseResult val) {
+boolean all(enum ParseResult* arr, int len, enum ParseResult val) {
   for (int i = 0; i < len; i++) {
     if (arr[i] != val) {
-      return 0;
+      return FALSE;
     }
   }
-  return 1;
+  return TRUE;
 }
 
 /*
@@ -725,6 +832,12 @@ int max_idx(int* arr, int len) {
   return idx;
 }
 
+void parse(char c, boolean restart, enum ParseResult* rv, int len) {
+  for (int i = 0; i < len; i++) {
+    rv[i] = token_parser(c, restart, i);
+  }
+}
+
 int main(int argc, char* argv[])
 {
   if (argc < 2) {
@@ -739,36 +852,34 @@ int main(int argc, char* argv[])
     exit(EXIT_FAILURE);
   }
 
-  char buf[2][BUF_SIZE + 1];
   char token[TOKEN_SIZE];
   int idx = 0;
-
-  buf[0][BUF_SIZE] = EOF;
-  buf[1][BUF_SIZE] = EOF;
-
-  char* lexeme_begin = buf[0];
-  char* forward = &buf[1][BUF_SIZE];
 
   int n_line = 1;
   int n[NTYPES] = { 0 };
   int len[NTYPES + 1] = { 0 };
 
-  pthread_t tids[NTYPES + 1];
-  for (int i = 0; i < NELEMS(tids); i++) {
-    sem_init(&full[i], 0, 0);
-    sem_init(&empty[i], 0, 0);
-    pthread_create(&tids[i], NULL, token_parser, (void*)(size_t)i);
-  }
+  char c;
+  boolean restart;
+  enum ParseResult rv[NTYPES + 1];
+
+  int cnt;
+
+  char buf[2][BUF_SIZE + 1];
+  char* lexeme_begin = buf[0];
+  char* forward = &buf[1][BUF_SIZE];
+  
+  buf[0][BUF_SIZE] = EOF;
+  buf[1][BUF_SIZE] = EOF;
 
   for (;;) {
     switch (*forward) {
       case EOF:
-        int cnt = 0;
-        for (; cnt < 2; cnt++) {
+        for (cnt = 0; cnt < 2; cnt++) {
           if (forward == &buf[cnt][BUF_SIZE]) {
             int i = OTHER(cnt);
-            int rv = fread(buf[i], sizeof(char), BUF_SIZE, fp);
-            buf[i][rv] = EOF;
+            int rc = fread(buf[i], sizeof(char), BUF_SIZE, fp);
+            buf[i][rc] = EOF;
             if (lexeme_begin == forward)
               lexeme_begin = buf[i];
             forward = buf[i];
@@ -794,34 +905,28 @@ int main(int argc, char* argv[])
         break;
 
       default:
-        char c = *forward;
+        c = *forward;
+        restart = (lexeme_begin == forward) ? TRUE : FALSE;
+        parse(c, restart, rv, NELEMS(rv));
+
         token[idx++] = c;
-        enum ParseResult rv[NTYPES + 1];
-        input_c = c;
-        input_restart = (lexeme_begin == forward);
-        for (int i = 0; i < NELEMS(rv); i++) {
-          sem_post(&full[i]);
-        }
-        for (int i = 0; i < NELEMS(rv); i++) {
-          sem_wait(&empty[i]);
-          rv[i] = res[i];
-        }
         forward++;
-        if (all(rv, NELEMS(rv), PARSE_ERROR)) {
+
+        if (all(rv, NELEMS(rv), PARSE_END)) {
           int i = max_idx(len, NELEMS(len));
-          set(len, NELEMS(len), 0);
-          lexeme_begin = forward;
           if (i != -1) {
             if (i != NTYPES) {
-              token[idx - 1] = '\0';
+              token[len[i]] = '\0';
               printf("%d <%s,%s>\n", n_line, token_name(i), token);
               n[i]++;
             }
             if (c == '\n') {
               n_line--;
             }
-            forward--;
+            forward = lexeme_begin + len[i];
           }
+          set(len, NELEMS(len), 0);
+          lexeme_begin = forward;
           idx = 0;
         }
         else {
@@ -831,6 +936,7 @@ int main(int argc, char* argv[])
             }
           }
         }
+
         if (c == '\n') {
           n_line++;
         }
