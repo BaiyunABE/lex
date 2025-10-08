@@ -772,7 +772,7 @@ enum ParseResult floating_parser(char c, boolean rst) {
       if (isxdigit(c)) {
         state = HEX;
       }
-      else if (state == '.') {
+      else if (c == '.') {
         state = HDOT;
       }
       else {
@@ -921,8 +921,11 @@ enum ParseResult error_parser(char c, boolean rst) {
       if (c == '\\') {
         state = CHAR_ESCAPE;
       }
-      else if (c == '\n' || c == '\'') {
+      else if (c == '\n') {
         state = ERROR;
+      }
+      else if (c == '\'') {
+        state = BAD_CHAR;
       }
       break;
 
@@ -930,8 +933,11 @@ enum ParseResult error_parser(char c, boolean rst) {
       if (c == '\\') {
         state = STR_ESCAPE;
       }
-      else if (c == '\n' || c == '\"') {
+      else if (c == '\n') {
         state = ERROR;
+      }
+      else if (c == '\"') {
+        state = BAD_CHAR;
       }
       break;
 
