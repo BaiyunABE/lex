@@ -186,6 +186,7 @@ enum ParseResult charcon_parser(char c, boolean rst) {
   static enum {
     START,
     WIDE,
+    EMPTY,
     WAIT,
     ESCAPE,
     HEX,
@@ -208,7 +209,7 @@ enum ParseResult charcon_parser(char c, boolean rst) {
   switch (state) {
     case START:
       if (c == '\'') {
-        state = WAIT;
+        state = EMPTY;
       }
       else if (LOWER(c) == 'u' || c == 'L') {
         state = WIDE;
@@ -220,6 +221,18 @@ enum ParseResult charcon_parser(char c, boolean rst) {
 
     case WIDE:
       if (c == '\'') {
+        state = EMPTY;
+      }
+      else {
+        state = ERROR;
+      }
+      break;
+
+    case EMPTY:
+      if (c == '\\') {
+        state = ESCAPE;
+      }
+      else if (c != '\'' || c != '\n') {
         state = WAIT;
       }
       else {
@@ -890,10 +903,7 @@ enum ParseResult error_parser(char c, boolean rst) {
 
   switch (state) {
     case START:
-      if (c == '@' || c == '$' || c == '`') {
-        state = BAD_CHAR;
-      }
-      else if (c == '\'') {
+      if (c == '\'') {
         state = BAD_CHARCON;
       }
       else if (c == '\"') {
@@ -907,6 +917,9 @@ enum ParseResult error_parser(char c, boolean rst) {
       }
       else if (c == 'u') {
         state = LOWER_PREF;
+      }
+      else if (c != ' ' && c != '\n' && c != '\t') {
+        state = BAD_CHAR;
       }
       else {
         state = ERROR;
