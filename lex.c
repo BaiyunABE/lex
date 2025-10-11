@@ -1155,8 +1155,17 @@ int max_idx(int* arr, int len) {
 }
 
 void parse(char c, boolean rst, enum ParseResult* rv, int len) {
-  for (int i = 0; i < len; i++) {
-    rv[i] = token_parser(c, rst, i);
+  if (rst == TRUE) {
+    for (int i = 0; i < len; i++) {
+      rv[i] = token_parser(c, rst, i);
+    }
+  }
+  else {
+    for (int i = 0; i < len; i++) {
+      if (rv[i] != PARSE_END) {
+        rv[i] = token_parser(c, rst, i);
+      }
+    }
   }
 }
 
